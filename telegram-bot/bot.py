@@ -26,10 +26,10 @@ HEADERS = {
 }
 
 # Thresholds for "good movement" — at least ONE must be satisfied
-MIN_TOTAL_SHOTS       = 5   # total shots combined (home + away)
-MIN_SHOTS_ON_TARGET   = 3   # shots on target combined
-MIN_CORNERS           = 4   # corner kicks combined
-MIN_DANGEROUS_ATTACKS = 35  # dangerous attacks combined
+MIN_TOTAL_SHOTS       = 4   # total shots combined (home + away)
+MIN_SHOTS_ON_TARGET   = 2   # shots on target combined
+MIN_CORNERS           = 3   # corner kicks combined
+MIN_DANGEROUS_ATTACKS = 25  # dangerous attacks combined
 
 # Thresholds for "high intensity" alert — match is on fire
 INTENSE_SHOTS    = 8   # total shots
@@ -224,9 +224,9 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
 
                 # ── Check alert conditions ──────────────────────────────────
                 needs_alert = (
-                    (total == 0 and minute >= 18 and not state["alerted_05"]) or
-                    (total == 1 and held  >= 12  and not state["alerted_15"]) or
-                    (total == 2 and held  >= 8   and not state["alerted_25"])
+                    (total == 0 and minute >= 15 and not state["alerted_05"]) or
+                    (total == 1 and held  >= 10  and not state["alerted_15"]) or
+                    (total == 2 and held  >= 6   and not state["alerted_25"])
                 )
 
                 # ── Fetch stats if needed for intensity or betting alert ────
@@ -269,7 +269,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                     continue
 
                 # ── Send relevant alerts ────────────────────────────────────
-                if total == 0 and minute >= 18 and not state["alerted_05"]:
+                if total == 0 and minute >= 15 and not state["alerted_05"]:
                     state["alerted_05"] = True
                     msg = format_alert(
                         flag, country, league, home, away, hs, aws, minute,
@@ -280,7 +280,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
                     logger.info(f"Alert Over 0.5 HT → {home} vs {away}")
 
-                if total == 1 and held >= 12 and not state["alerted_15"]:
+                if total == 1 and held >= 10 and not state["alerted_15"]:
                     state["alerted_15"] = True
                     msg = format_alert(
                         flag, country, league, home, away, hs, aws, minute,
@@ -291,7 +291,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
                     logger.info(f"Alert Over 1.5 HT → {home} vs {away}")
 
-                if total == 2 and held >= 8 and not state["alerted_25"]:
+                if total == 2 and held >= 6 and not state["alerted_25"]:
                     state["alerted_25"] = True
                     msg = format_alert(
                         flag, country, league, home, away, hs, aws, minute,
