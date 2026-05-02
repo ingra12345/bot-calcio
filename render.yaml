@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bot-calcio-live
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r telegram-bot/requirements.txt
+    startCommand: python telegram-bot/bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
