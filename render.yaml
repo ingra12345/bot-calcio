@@ -4,6 +4,7 @@ services:
     env: python
     region: frankfurt
     plan: free
+    pythonVersion: "3.11.0"
     buildCommand: pip install -r telegram-bot/requirements.txt
     startCommand: python telegram-bot/bot.py
     envVars:
