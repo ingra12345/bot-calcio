@@ -1,12 +1,9 @@
 services:
   - type: web
     name: bot-calcio-live
-    env: python
+    env: docker
     region: frankfurt
     plan: free
-    pythonVersion: "3.11.0"
-    buildCommand: pip install -r telegram-bot/requirements.txt
-    startCommand: python telegram-bot/bot.py
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
