@@ -381,6 +381,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
+async def auto_start_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    global is_active, monitor_task
+    if is_active:
+        return
+    is_active = True
+    monitor_task = asyncio.create_task(monitor_loop(context))
+    logger.info("Monitoraggio avviato automaticamente via job.")
+
+
 def main():
     # Start keep-alive HTTP server in background (needed for Render free tier)
     threading.Thread(target=start_health_server, daemon=True).start()
@@ -391,7 +400,10 @@ def main():
     app.add_handler(CommandHandler("test", test_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("Bot avviato — in attesa di comandi...")
+    # Auto-start monitoring 5 seconds after bot is fully ready
+    app.job_queue.run_once(auto_start_job, when=5)
+
+    logger.info("Bot avviato — monitoraggio partirà tra 5 secondi...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
