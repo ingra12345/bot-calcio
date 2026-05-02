@@ -381,29 +381,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
-async def _post_init(application: Application) -> None:
-    global is_active, monitor_task
-    is_active = True
-    monitor_task = asyncio.create_task(monitor_loop(application))
-    logger.info("Monitoraggio avviato automaticamente.")
-    await application.bot.send_message(
-        chat_id=CHAT_ID,
-        text="✅ Bot <b>ACCESO</b> automaticamente al riavvio.\nUsa /start per spegnerlo.",
-        parse_mode="HTML",
-    )
-
-
 def main():
     # Start keep-alive HTTP server in background (needed for Render free tier)
     threading.Thread(target=start_health_server, daemon=True).start()
 
-    # post_init must be passed via builder, not assigned directly
-    app = (
-        Application.builder()
-        .token(TOKEN)
-        .post_init(_post_init)
-        .build()
-    )
+    app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stato", stato_command))
     app.add_handler(CommandHandler("test", test_command))
