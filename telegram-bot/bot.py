@@ -93,13 +93,18 @@ def get_match_stats(event_id: int) -> dict | None:
         return None
 
 
-def evaluate_momentum(stats: dict | None) -> tuple[bool, str]:
+def evaluate_momentum(stats: dict | None) -> tuple[bool, str, str]:
     """
-    Returns (has_momentum: bool, stats_line: str).
-    If stats is None, fails open (lets alert through) with an empty line.
+    Returns (has_momentum: bool, stats_line: str, stars: str).
+    If stats is None, fails open (lets alert through) with empty line and 1 star.
+    Scoring (0-8 pts → 1-5 ⭐):
+      shots     >=  4 → +1,  >= 8 → +2
+      on_target >=  2 → +1,  >= 5 → +2
+      corners   >=  3 → +1,  >= 6 → +2
+      dangerous >= 25 → +1, >= 55 → +2
     """
     if stats is None:
-        return True, ""
+        return True, "", "⭐"
 
     shots     = stats.get("Total shots",       stats.get("Shots", 0))
     on_target = stats.get("Shots on target",   0)
@@ -113,6 +118,15 @@ def evaluate_momentum(stats: dict | None) -> tuple[bool, str]:
         dangerous >= MIN_DANGEROUS_ATTACKS
     )
 
+    # Confidence score
+    pts = 0
+    pts += 2 if shots     >= 8  else (1 if shots     >= 4  else 0)
+    pts += 2 if on_target >= 5  else (1 if on_target >= 2  else 0)
+    pts += 2 if corners   >= 6  else (1 if corners   >= 3  else 0)
+    pts += 2 if dangerous >= 55 else (1 if dangerous >= 25 else 0)
+    star_count = 1 if pts <= 0 else 2 if pts <= 2 else 3 if pts <= 4 else 4 if pts <= 6 else 5
+    stars = "⭐" * star_count
+
     parts = []
     if shots:     parts.append(f"Tiri: {shots}")
     if on_target: parts.append(f"In porta: {on_target}")
@@ -120,11 +134,11 @@ def evaluate_momentum(stats: dict | None) -> tuple[bool, str]:
     if dangerous: parts.append(f"Att. per.: {dangerous}")
     stats_line = " | ".join(parts) if parts else ""
 
-    return has_momentum, stats_line
+    return has_momentum, stats_line, stars
 
 
 def format_alert(flag, country, league, home, away, hs, aws, minute,
-                 bet, note, stats_line: str = "") -> str:
+                 bet, note, stats_line: str = "", stars: str = "") -> str:
     lines = [
         f"{flag} <b>{country} — {league}</b>",
         f"⚽ <b>{home} vs {away}</b>",
@@ -134,6 +148,8 @@ def format_alert(flag, country, league, home, away, hs, aws, minute,
     if stats_line:
         lines.append(f"📈 {stats_line}")
     lines.append(f"💰 Scommetti: <b>{bet}</b>")
+    if stars:
+        lines.append(f"🎖 Confidenza: <b>{stars}</b>")
     return "\n".join(lines)
 
 
@@ -232,7 +248,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                 # ── Fetch stats if needed for intensity or betting alert ────
                 needs_stats = needs_alert or not state["alerted_intense"]
                 stats       = get_match_stats(match_id) if needs_stats else None
-                has_momentum, stats_line = evaluate_momentum(stats)
+                has_momentum, stats_line, stars = evaluate_momentum(stats)
 
                 # ── High-intensity check (independent of score/time) ────────
                 if stats and not state["alerted_intense"]:
@@ -251,6 +267,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                             f"⚽ <b>{home} vs {away}</b>\n"
                             f"📊 Risultato: <b>{hs}-{aws}</b>  |  ⏱ <b>{minute}'</b>\n"
                             f"📈 {stats_line}\n"
+                            f"🎖 Confidenza: <b>{stars}</b>\n"
                             f"⚠️ <b>Attenzione: partita molto viva!</b>"
                         )
                         await context.bot.send_message(
@@ -275,7 +292,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                         flag, country, league, home, away, hs, aws, minute,
                         "🎯 Over 0.5 HT",
                         f"0-0 da {minute} minuti",
-                        stats_line,
+                        stats_line, stars,
                     )
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
                     logger.info(f"Alert Over 0.5 HT → {home} vs {away}")
@@ -286,7 +303,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                         flag, country, league, home, away, hs, aws, minute,
                         "🎯 Over 1.5 HT",
                         f"1 gol da {held} minuti",
-                        stats_line,
+                        stats_line, stars,
                     )
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
                     logger.info(f"Alert Over 1.5 HT → {home} vs {away}")
@@ -297,7 +314,7 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                         flag, country, league, home, away, hs, aws, minute,
                         "🎯 Over 2.5 HT",
                         f"2 gol da {held} minuti",
-                        stats_line,
+                        stats_line, stars,
                     )
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
                     logger.info(f"Alert Over 2.5 HT → {home} vs {away}")
@@ -365,17 +382,17 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     examples = [
         ("🇮🇹", "Italy", "Serie A", "Inter", "Napoli", 0, 0, 22,
          "🎯 Over 0.5 HT", "0-0 da 22 minuti",
-         "Tiri: 6 | In porta: 3 | Corner: 4 | Att. per.: 41"),
+         "Tiri: 6 | In porta: 3 | Corner: 4 | Att. per.: 41", "⭐⭐⭐"),
         ("🇩🇪", "Germany", "Bundesliga", "Bayern", "Dortmund", 1, 0, 31,
          "🎯 Over 1.5 HT", "1 gol da 14 minuti",
-         "Tiri: 8 | In porta: 4 | Corner: 5 | Att. per.: 52"),
+         "Tiri: 8 | In porta: 4 | Corner: 5 | Att. per.: 52", "⭐⭐⭐⭐"),
         ("🇪🇸", "Spain", "La Liga", "Barcelona", "Real Madrid", 1, 1, 38,
          "🎯 Over 2.5 HT", "2 gol da 9 minuti",
-         "Tiri: 11 | In porta: 5 | Corner: 7 | Att. per.: 63"),
+         "Tiri: 11 | In porta: 5 | Corner: 7 | Att. per.: 63", "⭐⭐⭐⭐⭐"),
     ]
     await update.message.reply_text("🧪 <b>Test alert — messaggi di esempio:</b>", parse_mode="HTML")
-    for flag, country, league, home, away, hs, aws, minute, bet, note, stats in examples:
-        msg = format_alert(flag, country, league, home, away, hs, aws, minute, bet, note, stats)
+    for flag, country, league, home, away, hs, aws, minute, bet, note, stats, stars in examples:
+        msg = format_alert(flag, country, league, home, away, hs, aws, minute, bet, note, stats, stars)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="HTML")
 
 
