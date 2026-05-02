@@ -31,6 +31,11 @@ MIN_SHOTS_ON_TARGET   = 3   # shots on target combined
 MIN_CORNERS           = 4   # corner kicks combined
 MIN_DANGEROUS_ATTACKS = 35  # dangerous attacks combined
 
+# Thresholds for "high intensity" alert — match is on fire
+INTENSE_SHOTS    = 8   # total shots
+INTENSE_CORNERS  = 5   # corner kicks
+INTENSE_ATTACKS  = 55  # dangerous attacks
+
 is_active    = False
 monitor_task = None
 
@@ -192,11 +197,12 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                 # ── Initialise / update state ───────────────────────────────
                 if match_id not in match_states:
                     match_states[match_id] = {
-                        "score":       score_key,
+                        "score":        score_key,
                         "since_minute": 0 if total == 0 else minute,
-                        "alerted_05":  False,
-                        "alerted_15":  False,
-                        "alerted_25":  False,
+                        "alerted_05":   False,
+                        "alerted_15":   False,
+                        "alerted_25":   False,
+                        "alerted_intense": False,
                     }
                 else:
                     state = match_states[match_id]
@@ -223,12 +229,37 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                     (total == 2 and held  >= 8   and not state["alerted_25"])
                 )
 
+                # ── Fetch stats if needed for intensity or betting alert ────
+                needs_stats = needs_alert or not state["alerted_intense"]
+                stats       = get_match_stats(match_id) if needs_stats else None
+                has_momentum, stats_line = evaluate_momentum(stats)
+
+                # ── High-intensity check (independent of score/time) ────────
+                if stats and not state["alerted_intense"]:
+                    shots     = stats.get("Total shots",       stats.get("Shots", 0))
+                    corners   = stats.get("Corner kicks",      stats.get("Corners", 0))
+                    dangerous = stats.get("Dangerous attacks", 0)
+                    is_intense = (
+                        (shots >= INTENSE_SHOTS and corners >= INTENSE_CORNERS) or
+                        (dangerous >= INTENSE_ATTACKS and corners >= INTENSE_CORNERS)
+                    )
+                    if is_intense:
+                        state["alerted_intense"] = True
+                        intense_msg = (
+                            f"🔥 <b>PARTITA AD ALTA INTENSITÀ</b>\n"
+                            f"{flag} <b>{country} — {league}</b>\n"
+                            f"⚽ <b>{home} vs {away}</b>\n"
+                            f"📊 Risultato: <b>{hs}-{aws}</b>  |  ⏱ <b>{minute}'</b>\n"
+                            f"📈 {stats_line}\n"
+                            f"⚠️ <b>Attenzione: partita molto viva!</b>"
+                        )
+                        await context.bot.send_message(
+                            chat_id=CHAT_ID, text=intense_msg, parse_mode="HTML"
+                        )
+                        logger.info(f"Alert ALTA INTENSITÀ → {home} vs {away}")
+
                 if not needs_alert:
                     continue
-
-                # ── Fetch statistics only when an alert is pending ──────────
-                stats = get_match_stats(match_id)
-                has_momentum, stats_line = evaluate_momentum(stats)
 
                 if not has_momentum:
                     logger.info(
@@ -305,12 +336,14 @@ async def stato_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         1 for s in match_states.values()
         if s["alerted_05"] or s["alerted_15"] or s["alerted_25"]
     )
+    intense = sum(1 for s in match_states.values() if s.get("alerted_intense"))
     pending = total - alerted
 
     lines = [
         "✅ Bot <b>ACCESO</b>\n",
         f"📋 Partite monitorate nel 1° tempo: <b>{total}</b>",
-        f"🔔 Alert già inviati: <b>{alerted}</b>",
+        f"🔔 Alert scommesse inviati: <b>{alerted}</b>",
+        f"🔥 Alert alta intensità inviati: <b>{intense}</b>",
         f"⏳ In attesa di soglia: <b>{pending}</b>",
     ]
 
@@ -322,7 +355,8 @@ async def stato_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             a05 = "✓" if state["alerted_05"] else "·"
             a15 = "✓" if state["alerted_15"] else "·"
             a25 = "✓" if state["alerted_25"] else "·"
-            lines.append(f"  {score} (dal {since}') — 0.5{a05} 1.5{a15} 2.5{a25}")
+            fire = "🔥" if state.get("alerted_intense") else "  "
+            lines.append(f"  {fire}{score} (dal {since}') — 0.5{a05} 1.5{a15} 2.5{a25}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
