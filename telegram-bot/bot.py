@@ -16,14 +16,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SOFASCORE_LIVE_URL  = "https://api.sofascore.com/api/v1/sport/football/events/live"
-SOFASCORE_STATS_URL = "https://api.sofascore.com/api/v1/event/{event_id}/statistics"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Referer": "https://www.sofascore.com/",
-}
+ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
+ESPN_SUMMARY    = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}"
+ESPN_HEADERS    = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 # Thresholds for "good movement" — at least ONE must be satisfied
 MIN_TOTAL_SHOTS       = 4   # total shots combined (home + away)
@@ -51,45 +46,140 @@ def flag_emoji(alpha2: str) -> str:
     return chr(0x1F1E6 + ord(alpha2[0].upper()) - 65) + chr(0x1F1E6 + ord(alpha2[1].upper()) - 65)
 
 
-def get_live_matches() -> list:
+# Map ESPN season slugs → (country, league_name, alpha2)
+_LEAGUE_MAP = {
+    "english-premier-league":    ("England",     "Premier League",    "GB"),
+    "english.1":                 ("England",     "Premier League",    "GB"),
+    "spanish-la-liga":           ("Spain",       "La Liga",           "ES"),
+    "spanish.1":                 ("Spain",       "La Liga",           "ES"),
+    "german-bundesliga":         ("Germany",     "Bundesliga",        "DE"),
+    "german.1":                  ("Germany",     "Bundesliga",        "DE"),
+    "italian-serie-a":           ("Italy",       "Serie A",           "IT"),
+    "italian.1":                 ("Italy",       "Serie A",           "IT"),
+    "french-ligue-1":            ("France",      "Ligue 1",           "FR"),
+    "french.1":                  ("France",      "Ligue 1",           "FR"),
+    "portuguese-primeira-liga":  ("Portugal",    "Primeira Liga",     "PT"),
+    "dutch-eredivisie":          ("Netherlands", "Eredivisie",        "NL"),
+    "champions-league":          ("Europe",      "Champions League",  "EU"),
+    "europa-league":             ("Europe",      "Europa League",     "EU"),
+    "turkish-super-lig":         ("Turkey",      "Süper Lig",         "TR"),
+    "scottish-premiership":      ("Scotland",    "Premiership",       "GB"),
+    "russian-premier-league":    ("Russia",      "Premier League",    "RU"),
+    "greek-super-league":        ("Greece",      "Super League",      "GR"),
+    "austrian-bundesliga":       ("Austria",     "Bundesliga",        "AT"),
+    "belgian-first-division-a":  ("Belgium",     "First Division A",  "BE"),
+}
+
+def _slug_to_league(slug: str) -> tuple[str, str, str]:
+    for key, val in _LEAGUE_MAP.items():
+        if key in slug:
+            return val
+    parts = [p for p in slug.split("-") if not p.isdigit() and len(p) > 2]
+    return "?", " ".join(p.capitalize() for p in parts) or slug, ""
+
+def _parse_minute(display_clock: str) -> int:
     try:
-        resp = requests.get(SOFASCORE_LIVE_URL, headers=HEADERS, timeout=10)
+        return int(display_clock.split(":")[0])
+    except Exception:
+        return 0
+
+
+def get_live_matches() -> list:
+    """
+    Returns normalized match dicts (same structure the monitor loop expects)
+    for all 1st-half matches from ESPN scoreboard API.
+    """
+    try:
+        resp = requests.get(ESPN_SCOREBOARD, headers=ESPN_HEADERS, timeout=10)
         resp.raise_for_status()
-        return resp.json().get("events", [])
+        events = resp.json().get("events", [])
     except Exception as e:
-        logger.warning(f"Errore fetch live: {e}")
+        logger.warning(f"Errore fetch live ESPN: {e}")
         return []
 
+    normalized = []
+    for ev in events:
+        comps = ev.get("competitions", [])
+        if not comps:
+            continue
+        comp   = comps[0]
+        status = comp.get("status", {})
+        stype  = status.get("type", {})
 
-def get_match_stats(event_id: int) -> dict | None:
+        if stype.get("state") != "in":
+            continue
+        if status.get("period", 0) != 1:
+            continue
+
+        minute = _parse_minute(status.get("displayClock", "0:00"))
+        slug   = ev.get("season", {}).get("slug", "")
+        country, league, alpha2 = _slug_to_league(slug)
+
+        home_score = away_score = 0
+        home_name  = away_name  = "?"
+        for ct in comp.get("competitors", []):
+            side = ct.get("homeAway", "")
+            name = ct.get("team", {}).get("displayName", "?")
+            try:
+                score = int(ct.get("score", 0))
+            except (ValueError, TypeError):
+                score = 0
+            if side == "home":
+                home_name, home_score = name, score
+            else:
+                away_name, away_score = name, score
+
+        normalized.append({
+            "id":        ev.get("id"),
+            "status":    {"code": 6},
+            "time":      {"played": minute},
+            "homeScore": {"current": home_score},
+            "awayScore": {"current": away_score},
+            "homeTeam":  {"name": home_name},
+            "awayTeam":  {"name": away_name},
+            "tournament": {
+                "name":     league,
+                "category": {"name": country, "alpha2": alpha2},
+            },
+        })
+
+    return normalized
+
+
+def get_match_stats(event_id: str) -> dict | None:
     """
-    Returns a flat dict of combined (home+away) stat values for the match,
-    e.g. {"Total shots": 7, "Shots on target": 3, "Corner kicks": 4, ...}
-    Returns None if the request fails.
+    Returns combined home+away stats dict with keys:
+      "Total shots", "Shots on target", "Corner kicks", "Dangerous attacks"
+    Returns None if unavailable.
     """
     try:
-        url  = SOFASCORE_STATS_URL.format(event_id=event_id)
-        resp = requests.get(url, headers=HEADERS, timeout=8)
+        url  = ESPN_SUMMARY.format(event_id=event_id)
+        resp = requests.get(url, headers=ESPN_HEADERS, timeout=8)
         resp.raise_for_status()
-        data = resp.json()
+        teams = resp.json().get("boxscore", {}).get("teams", [])
+        if not teams:
+            return None
 
-        combined: dict[str, int] = {}
-        for period_block in data.get("statistics", []):
-            if period_block.get("period") != "ALL":
-                continue
-            for group in period_block.get("groups", []):
-                for item in group.get("statisticsItems", []):
-                    name = item.get("name", "")
-                    try:
-                        h = int(str(item.get("homeValue", 0) or 0))
-                        a = int(str(item.get("awayValue", 0) or 0))
-                        combined[name] = h + a
-                    except (ValueError, TypeError):
-                        pass
-        return combined if combined else None
+        raw: dict[str, int] = {}
+        for team in teams:
+            for s in team.get("statistics", []):
+                name = s.get("name", "")
+                try:
+                    val = int(s.get("displayValue", 0) or 0)
+                except (ValueError, TypeError):
+                    val = 0
+                raw[name] = raw.get(name, 0) + val
+
+        result = {
+            "Total shots":       raw.get("totalShots",   raw.get("shots", 0)),
+            "Shots on target":   raw.get("shotsOnGoal",  raw.get("shotsOnTarget", 0)),
+            "Corner kicks":      raw.get("corners",      0),
+            "Dangerous attacks": raw.get("dangerousAttacks", 0),
+        }
+        return result if any(result.values()) else None
 
     except Exception as e:
-        logger.warning(f"Errore stats match {event_id}: {e}")
+        logger.warning(f"Errore stats ESPN {event_id}: {e}")
         return None
 
 
